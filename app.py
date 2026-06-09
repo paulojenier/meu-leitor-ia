@@ -3,14 +3,20 @@ import os
 import streamlit as st
 import edge_tts
 from pypdf import PdfReader
+from docx import Document
+import ebooklib
+from ebooklib import epub
+from bs4 import BeautifulSoup
+import warnings
 
-# Configurações iniciais da página web
-st.set_page_config(page_title="Meu Leitor IA", page_icon="🔊", layout="centered")
+# Ignorar avisos chatos de bibliotecas antigas de e-book
+warnings.filterwarnings('ignore', category=UserWarning)
+
+st.set_page_config(page_title="Meu Leitor IA Super", page_icon="🔊", layout="centered")
 
 st.title("🔊 Meu @Voice Aloud Web")
-st.markdown("Transforme seus arquivos de texto e livros em áudios realistas com IA.")
+st.markdown("Converta Livros (PDF, EPUB, MOBI, DOCX, TXT) em Áudio Realista com IA.")
 
-# Dicionário de vozes excelentes em Português
 VOZES = {
     "Francisca (Feminina - Natural)": "pt-BR-FranciscaNeural",
     "Thalita (Feminina - Suave)": "pt-BR-ThalitaNeural",
@@ -18,58 +24,112 @@ VOZES = {
     "Nicolau (Masculino - Robusto)": "pt-BR-NicolauNeural",
 }
 
-# 1. Configurações na barra lateral (Sidebar)
+# Configurações na barra lateral
 st.sidebar.header("⚙️ Configurações da Voz")
 voz_selecionada = st.sidebar.selectbox("Escolha a Voz:", list(VOZES.keys()))
 velocidade_selecionada = st.sidebar.selectbox(
-    "Velocidade da leitura:", 
-    ["-50%", "-25%", "Padrão", "+25%", "+50%", "+100%"], 
-    index=2
+    "Velocidade:", ["-50%", "-25%", "Padrão", "+25%", "+50%", "+100%"], index=2
 )
 
-# Mapeamento de velocidade para a API
 vel_map = {"-50%": "-50%", "-25%": "-25%", "Padrão": "+0Hz", "+25%": "+25%", "+50%": "+50%", "+100%": "+100%"}
 velocidade = vel_map[velocidade_selecionada]
 
-# 2. Área de Upload de Arquivos
-st.subheader("📖 1. Envie seu arquivo ou digite o texto")
-arquivo_enviado = st.file_uploader("Traga seu livro ou artigo (Formatos aceitos: PDF ou TXT)", type=["pdf", "txt"])
+st.subheader("📖 1. Envie seu arquivo")
 
-texto_final = ""
+# Atualizado para aceitar múltiplos formatos!
+arquivo_enviado = st.file_uploader(
+    "Formatos aceitos: PDF, TXT, DOCX, EPUB, MOBI", 
+    type=["pdf", "txt", "docx", "epub", "mobi"]
+)
 
+# Inicializa a variável no sistema do Streamlit para não sumir ao clicar em botões
+if "texto_extraido" not in st.session_state:
+    st.session_state["texto_extraido"] = ""
+
+# Processamento do arquivo enviado
 if arquivo_enviado is not None:
     nome_arquivo = arquivo_enviado.name
-    if nome_arquivo.endswith('.pdf'):
-        with st.spinner("Extraindo texto do PDF..."):
-            leitor_pdf = PdfReader(arquivo_enviado)
-            for pagina in leitor_pdf.pages:
-                texto_final += pagina.extract_text() + "\n"
-        st.success("PDF processado com sucesso!")
-    elif nome_arquivo.endswith('.txt'):
-        texto_final = arquivo_enviado.read().decode("utf-8")
-        st.success("Arquivo de texto processado com sucesso!")
+    
+    # Executa apenas se o texto armazenado for diferente (evita travar a tela em loops)
+    if st.session_state["texto_extraido"] == "":
+        with st.spinner(f"Processando arquivo '{nome_arquivo}'... Aguarde."):
+            try:
+                texto_temporario = ""
+                
+                # 1. Lógica para PDF
+                if nome_arquivo.lower().endswith('.pdf'):
+                    leitor_pdf = PdfReader(arquivo_enviado)
+                    for pagina in leitor_pdf.pages:
+                        texto_pag = pagina.extract_text()
+                        if texto_pag:
+                            texto_temporario += texto_pag + "\n"
+                
+                # 2. Lógica para DOCX (Word)
+                elif nome_arquivo.lower().endswith('.docx'):
+                    doc = Document(arquivo_enviado)
+                    for paragrafo in doc.paragraphs:
+                        texto_temporario += paragrafo.text + "\n"
+                
+                # 3. Lógica para TXT
+                elif nome_arquivo.lower().endswith('.txt'):
+                    texto_temporario = arquivo_enviado.read().decode("utf-8", errors="ignore")
+                
+                # 4. Lógica para EPUB / MOBI (Livros Digitais)
+                elif nome_arquivo.lower().endswith('.epub') or nome_arquivo.lower().endswith('.mobi'):
+                    # Salva temporariamente o arquivo na nuvem para a biblioteca conseguir ler
+                    with open("temp_book.epub", "wb") as f:
+                        f.write(arquivo_enviado.getbuffer())
+                    
+                    livro = epub.read_epub("temp_book.epub")
+                    for item in livro.get_items():
+                        if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                            # Remove tags HTML de dentro do arquivo ePub/Mobi
+                            soup = BeautifulSoup(item.get_content(), 'html.parser')
+                            texto_temporario += soup.get_text() + "\n"
+                    
+                    if os.path.exists("temp_book.epub"):
+                        os.remove("temp_book.epub")
 
+                # Se conseguiu extrair algo, joga na memória da tela
+                if texto_temporario.strip():
+                    st.session_state["texto_extraido"] = texto_temporario
+                    st.success("✅ Arquivo processado e carregado abaixo!")
+                else:
+                    st.error("⚠️ Não encontramos texto legível dentro deste arquivo.")
+                    
+            except Exception as e:
+                st.error(f"Erro ao ler o arquivo: {e}")
+
+# Caixa de texto onde o conteúdo aparece automaticamente (e você pode editar)
 texto_input = st.text_area(
-    "Conteúdo para leitura:", 
-    value=texto_final, 
+    "Conteúdo para leitura (Você pode apagar partes ou colar novos textos aqui):", 
+    value=st.session_state["texto_extraido"], 
     height=250
 )
 
-# 3. Função assíncrona para gerar o áudio
+# Botão para limpar o texto e enviar outro arquivo
+if st.button("🗑️ Limpar Texto / Trocar de Arquivo"):
+    st.session_state["texto_extraido"] = ""
+    st.rerun()
+
+# 3. Gerador do Áudio
+st.subheader("🎧 2. Ouvir e Baixar")
+
 async def gerar_audio_web(texto, voz, vel):
     arquivo_saida = "audio_gerado.mp3"
     communicate = edge_tts.Communicate(texto, voice=voz, rate=vel)
     await communicate.save(arquivo_saida)
     return arquivo_saida
 
-# 4. Botão para Processar e Gerar o Player
-st.subheader("🎧 2. Ouvir e Baixar")
-
 if st.button("🚀 Gerar Áudio com IA", use_container_width=True):
     if not texto_input.strip():
-        st.warning("Por favor, digite algum texto ou faça o upload de um arquivo primeiro.")
+        st.warning("O campo de texto está vazio. Envie um arquivo ou digite algo.")
     else:
-        with st.spinner("A inteligência artificial está convertendo seu texto em áudio... Aguarde."):
+        # Se o texto for absurdamente gigante, avisa o usuário (bom para testes no celular)
+        if len(texto_input) > 50000:
+            st.info("ℹ️ O texto é longo. O processamento da IA pode demorar alguns segundos a mais.")
+            
+        with st.spinner("A inteligência artificial está convertendo seu texto... Aguarde."):
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
