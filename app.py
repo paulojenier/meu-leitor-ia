@@ -31,15 +31,15 @@ velocidade_selecionada = st.sidebar.selectbox(
     "Velocidade:", ["-50%", "-25%", "Padrão", "+25%", "+50%", "+100%"], index=2
 )
 
-vel_map = {"-50%": "-50%", "-25%": "-25%", "Padrão": "+0Hz", "+25%": "+25%", "+50%": "+50%", "+100%": "+100%"}
+# CORREÇÃO DO ERRO INVALID RATE: Mudado de +0Hz para +0%
+vel_map = {"-50%": "-50%", "-25%": "-25%", "Padrão": "+0%", "+25%": "+25%", "+50%": "+50%", "+100%": "+100%"}
 velocidade = vel_map[velocidade_selecionada]
 
 st.subheader("📖 1. Envie seu arquivo")
 
-# Atualizado para aceitar múltiplos formatos!
+# CORREÇÃO DO FILTRO DE EPUB: Removido o 'type=' para o celular mostrar todos os seus arquivos na pasta!
 arquivo_enviado = st.file_uploader(
-    "Formatos aceitos: PDF, TXT, DOCX, EPUB, MOBI", 
-    type=["pdf", "txt", "docx", "epub", "mobi"]
+    "Selecione seu livro ou artigo (Formatos aceitos internamente: PDF, TXT, DOCX, EPUB, MOBI)"
 )
 
 # Inicializa a variável no sistema do Streamlit para não sumir ao clicar em botões
@@ -50,7 +50,7 @@ if "texto_extraido" not in st.session_state:
 if arquivo_enviado is not None:
     nome_arquivo = arquivo_enviado.name
     
-    # Executa apenas se o texto armazenado for diferente (evita travar a tela em loops)
+    # Executa apenas se a memória estiver vazia (evita loops infinitos)
     if st.session_state["texto_extraido"] == "":
         with st.spinner(f"Processando arquivo '{nome_arquivo}'... Aguarde."):
             try:
@@ -89,13 +89,14 @@ if arquivo_enviado is not None:
                     
                     if os.path.exists("temp_book.epub"):
                         os.remove("temp_book.epub")
+                
+                else:
+                    st.error("⚠️ Formato de arquivo não suportado. Por favor, envie PDF, TXT, DOCX, EPUB ou MOBI.")
 
                 # Se conseguiu extrair algo, joga na memória da tela
                 if texto_temporario.strip():
                     st.session_state["texto_extraido"] = texto_temporario
                     st.success("✅ Arquivo processado e carregado abaixo!")
-                else:
-                    st.error("⚠️ Não encontramos texto legível dentro deste arquivo.")
                     
             except Exception as e:
                 st.error(f"Erro ao ler o arquivo: {e}")
@@ -125,7 +126,6 @@ if st.button("🚀 Gerar Áudio com IA", use_container_width=True):
     if not texto_input.strip():
         st.warning("O campo de texto está vazio. Envie um arquivo ou digite algo.")
     else:
-        # Se o texto for absurdamente gigante, avisa o usuário (bom para testes no celular)
         if len(texto_input) > 50000:
             st.info("ℹ️ O texto é longo. O processamento da IA pode demorar alguns segundos a mais.")
             
