@@ -12,10 +12,10 @@ import warnings
 
 warnings.filterwarnings('ignore', category=UserWarning)
 
-st.set_page_config(page_title="Leitor IA Premium", page_icon="🔊", layout="centered")
+st.set_page_config(page_title="Leitor IA Persistente", page_icon="🔊", layout="centered")
 
 st.title("🔊 Meu @Voice Aloud Web")
-st.markdown("Transforme seus livros em áudio de forma estável e sem erros de limite.")
+st.markdown("Transforme seus livros em áudio de forma estável e sem perder seus downloads.")
 
 VOZES = {
     "Francisca (Feminina - Natural)": "pt-BR-FranciscaNeural",
@@ -32,6 +32,9 @@ velocidade_selecionada = st.sidebar.selectbox(
 
 vel_map = {"-50%": "-50%", "-25%": "-25%", "Padrão": "+0%", "+25%": "+25%", "+50%": "+50%", "+100%": "+100%"}
 velocidade = vel_map[velocidade_selecionada]
+
+# Caminho físico fixo onde salvaremos o áudio para ele nunca sumir sozinho
+ARQUIVO_FINAL_FISICO = "audio_gerado_permanente.mp3"
 
 def limpar_e_juntar_texto(texto_sujo):
     if not texto_sujo:
@@ -66,8 +69,12 @@ def limpar_e_juntar_texto(texto_sujo):
 st.subheader("📖 1. Envie seu arquivo")
 arquivo_enviado = st.file_uploader("Toque abaixo para buscar seu livro:")
 
+# Inicialização segura das variáveis de estado do aplicativo
 if "texto_extraido" not in st.session_state:
     st.session_state["texto_extraido"] = ""
+if "audio_disponivel" not in st.session_state:
+    # Se o arquivo físico já existir no servidor de uma execução anterior, deixa ele ativo
+    st.session_state["audio_disponivel"] = os.path.exists(ARQUIVO_FINAL_FISICO)
 
 if arquivo_enviado is not None:
     nome_arquivo = arquivo_enviado.name
@@ -117,38 +124,32 @@ texto_input = st.text_area(
     height=250
 )
 
+# Botão de limpar modificado para apagar também o arquivo físico de áudio antigo
 if st.button("🗑️ Limpar Texto / Trocar de Livro"):
     st.session_state["texto_extraido"] = ""
+    st.session_state["audio_disponivel"] = False
+    if os.path.exists(ARQUIVO_FINAL_FISICO):
+        os.remove(ARQUIVO_FINAL_FISICO)
     st.rerun()
 
 st.subheader("🎧 2. Ouvir e Baixar")
 
-# NOVA FUNÇÃO INTELIGENTE: Divide o texto em blocos pequenos para evitar o erro 503
 async def gerar_audio_em_blocos(texto_completo, voz, vel):
-    # Divide o texto por parágrafos (linhas em branco)
     paragrafos = [p.strip() for p in texto_completo.split("\n\n") if p.strip()]
-    
-    # Se não houver parágrafos bem definidos, divide por quebras de linha normais
     if len(paragrafos) <= 1:
         paragrafos = [p.strip() for p in texto_completo.split("\n") if p.strip()]
 
-    arquivo_final = "audio_gerado.mp3"
-    
-    # Se o arquivo final antigo existir, deleta
-    if os.path.exists(arquivo_final):
-        os.remove(arquivo_final)
+    if os.path.exists(ARQUIVO_FINAL_FISICO):
+        os.remove(ARQUIVO_FINAL_FISICO)
 
-    # Cria/Abre o arquivo final onde vamos juntar todos os pedaços
-    with open(arquivo_final, "wb") as f_completo:
-        barra_progresso = st.progress(0, text="Iniciando leitura dos blocos...")
+    with open(ARQUIVO_FINAL_FISICO, "wb") as f_completo:
+        barra_progresso = st.progress(0, text="Iniciando geração...")
         total_partes = len(paragrafos)
         
         for idx, paragrafo in enumerate(paragrafos):
-            # Atualiza o status na tela do usuário
             porcentagem = int(((idx + 1) / total_partes) * 100)
             barra_progresso.progress(porcentagem, text=f"Processando parte {idx+1} de {total_partes}...")
             
-            # Limita cada bloco a no máximo 2000 caracteres por segurança
             if len(paragrafo) > 2000:
                 pedacos_sub = [paragrafo[i:i+2000] for i in range(0, len(paragrafo), 2000)]
             else:
@@ -158,22 +159,18 @@ async def gerar_audio_em_blocos(texto_completo, voz, vel):
                 if not pedaco.strip():
                     continue
                 
-                # Gera o áudio do pequeno pedaço
                 arquivo_temp = f"temp_part_{idx}.mp3"
                 try:
                     communicate = edge_tts.Communicate(pedaco, voice=voz, rate=vel)
                     await communicate.save(arquivo_temp)
                     
-                    # Lê o pedaço gerado e joga para dentro do arquivo final unificado
                     if os.path.exists(arquivo_temp):
                         with open(arquivo_temp, "rb") as f_temp:
                             f_completo.write(f_temp.read())
                         os.remove(arquivo_temp)
                         
-                    # Pequena pausa milimétrica para o servidor da Microsoft não bloquear o app
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.1)
                 except Exception as e:
-                    # Se falhar um bloco por instabilidade da rede, tenta mais uma vez antes de quebrar
                     await asyncio.sleep(1)
                     communicate = edge_tts.Communicate(pedaco, voice=voz, rate=vel)
                     await communicate.save(arquivo_temp)
@@ -182,35 +179,43 @@ async def gerar_audio_em_blocos(texto_completo, voz, vel):
                             f_completo.write(f_temp.read())
                         os.remove(arquivo_temp)
 
-        barra_progresso.empty() # Limpa a barra quando terminar
-    return arquivo_final
+        barra_progresso.empty()
+    return ARQUIVO_FINAL_FISICO
 
 if st.button("🚀 Gerar Áudio com IA", use_container_width=True):
     if not texto_input.strip():
         st.warning("Insira ou carregue um texto primeiro.")
     else:
-        with st.spinner("A inteligência artificial está gerando o áudio em lotes seguros..."):
+        with st.spinner("Gerando áudio... Se você mudar de aba, aguarde o fim do processo antes de baixar."):
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                # Chamei a nova função em blocos aqui
-                audio_resultado = loop.run_until_complete(
+                loop.run_until_complete(
                     gerar_audio_em_blocos(texto_input, VOZES[voz_selecionada], velocidade)
                 )
-                
-                with open(audio_resultado, "rb") as f:
-                    bytes_de_audio = f.read()
-                
-                st.success("✨ Áudio completo unificado com sucesso!")
-                st.audio(bytes_de_audio, format="audio/mp3", start_time=0)
-                
-                st.download_button(
-                    label="📥 Baixar arquivo MP3",
-                    data=bytes_de_audio,
-                    file_name="leitura_ia.mp3",
-                    mime="audio/mp3",
-                    use_container_width=True
-                )
+                # Sinaliza que o áudio foi criado fisicamente no servidor com sucesso
+                st.session_state["audio_disponivel"] = True
+                st.success("✨ Áudio completo gerado!")
                 
             except Exception as e:
                 st.error(f"Erro ao processar áudio: {e}")
+
+# BLOCO DE PERSISTÊNCIA: Sempre exibe o player e o download se o arquivo existir no disco,
+# mesmo se a página tiver sido reiniciada porque você mudou de aba.
+if st.session_state["audio_disponivel"] and os.path.exists(ARQUIVO_FINAL_FISICO):
+    try:
+        with open(ARQUIVO_FINAL_FISICO, "rb") as f:
+            bytes_de_audio = f.read()
+        
+        st.write("---")
+        st.audio(bytes_de_audio, format="audio/mp3", start_time=0)
+        
+        st.download_button(
+            label="📥 Baixar arquivo MP3 (Salvo no servidor)",
+            data=bytes_de_audio,
+            file_name="leitura_ia_persistente.mp3",
+            mime="audio/mp3",
+            use_container_width=True
+        )
+    except Exception as e:
+        st.error(f"Erro ao carregar arquivo salvo: {e}")
