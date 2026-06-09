@@ -3,3 +3,4 @@ edge-tts
 pypdf
 python-docx
 ebooklib
+beautifulsoup4
